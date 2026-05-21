@@ -40,6 +40,15 @@ Novo Documento de Texto.txt
 .env
 .env.*
 
+# Local/generated documentation artifacts kept out of the public app repository.
+MANUAL_TECPOINT.md
+MANUAL_TECPOINT_COMPLETO.md
+TECPOINT_Manual_App.pdf
+PROJETO EXTENSAO DE DEV FEZ COISAS.pdf
+manual_app.py
+meu_portfolio.py
+lib/logosurvery.png
+
 # Symbolication related
 app.*.symbols
 
