@@ -1,6 +1,9 @@
-# TECPOINT - Gerenciador de OS para Campo
+# Survey - Gerenciador de OS para Campo
 
 Aplicativo mobile em Flutter para gerenciamento de Ordens de Servico da TECPOINT.
+O nome do aplicativo e **Survey**, conforme solicitado pela empresa demandante.
+O projeto de extensao e o **Gerenciador de OS para Campo - TECPOINT**.
+
 O app foi criado para tecnicos em campo registrarem atendimentos, clientes,
 equipamentos, laudos, fotos, localizacao, assinaturas e documentos gerados em
 PDF/Word, com funcionamento offline e sincronizacao posterior com Supabase.
