@@ -61,4 +61,22 @@ class EquipamentoService {
       await OfflineService.adicionarFila('equipamento', 'UPDATE', id, dados);
     }
   }
+
+  static Future<void> desativar(String id) async {
+    await OfflineService.updateEquipamento(id, {'ativo': 0});
+    try {
+      await supabase.from('equipamento').update({'ativo': false}).eq('id', id);
+    } catch (_) {
+      await OfflineService.adicionarFila('equipamento', 'UPDATE', id, {'ativo': false});
+    }
+  }
+
+  static Future<void> deletar(String id) async {
+    await OfflineService.deleteEquipamento(id);
+    try {
+      await supabase.from('equipamento').delete().eq('id', id);
+    } catch (_) {
+      await OfflineService.adicionarFila('equipamento', 'DELETE', id, {});
+    }
+  }
 }

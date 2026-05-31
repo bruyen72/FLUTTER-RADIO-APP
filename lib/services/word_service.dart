@@ -8,6 +8,8 @@ import 'package:share_plus/share_plus.dart';
 import '../models/ordem_servico.dart';
 import '../models/os_acessorio.dart';
 import '../models/os_checklist.dart';
+import '../models/os_analise_equipamento.dart';
+import '../models/os_testes.dart';
 import '../models/usuario.dart';
 import 'auth_service.dart';
 import 'os_service.dart';
@@ -20,11 +22,15 @@ class WordService {
       OsService.listarAcessorios(os.id),
       OsService.listarAssinatura(os.id),
       AuthService.getProfile(),
+      OsService.listarAnaliseEquipamento(os.id),
+      OsService.listarTestes(os.id),
     ]);
     final checklist  = results[0] as List<ChecklistItem>;
     final acessorios = results[1] as List<OsAcessorio>;
     final assinatura = results[2] as Map<String, dynamic>?;
     final perfil     = results[3] as Usuario?;
+    final analise    = results[4] as EquipamentoOS?;
+    final testes     = results[5] as List<OsTesteItem>;
 
     // Determina nome do técnico
     String tecnicoNome = os.tecnicoNome ?? '-';
@@ -37,22 +43,49 @@ class WordService {
     final sigCliBytes = _decodeSig(assinatura?['sig_cliente'] as String?);
     final sigTecBytes = _decodeSig(assinatura?['sig_tecnico'] as String?);
 
+    // Pré-carrega bytes das fotos do equipamento (local ou URL)
+    final analiseFotosBytes = <Uint8List>[];
+    if (analise != null) {
+      for (final path in analise.fotos) {
+        try {
+          Uint8List? bytes;
+          if (path.startsWith('http')) {
+            bytes = await _downloadBytes(path);
+          } else {
+            final f = File(path);
+            if (await f.exists()) bytes = await f.readAsBytes();
+          }
+          if (bytes != null) analiseFotosBytes.add(bytes);
+        } catch (_) {}
+      }
+    }
+
     final archive = Archive();
 
     // Partes obrigatórias do DOCX
-    _addFile(archive, '[Content_Types].xml', _contentTypes(sigCliBytes != null, sigTecBytes != null));
+    _addFile(archive, '[Content_Types].xml',
+        _contentTypes(sigCliBytes != null, sigTecBytes != null,
+            hasAnaliseFotos: analiseFotosBytes.isNotEmpty));
     _addFile(archive, '_rels/.rels', _rootRels());
     _addFile(archive, 'word/styles.xml', _styles());
     _addFile(archive, 'word/settings.xml', _settings());
-    _addFile(archive, 'word/_rels/document.xml.rels', _docRels(sigCliBytes != null, sigTecBytes != null));
+    _addFile(archive, 'word/_rels/document.xml.rels',
+        _docRels(sigCliBytes != null, sigTecBytes != null,
+            analiseFotosCount: analiseFotosBytes.length));
 
     // Imagens de assinatura
     if (sigCliBytes != null) _addBinary(archive, 'word/media/sig_cli.png', sigCliBytes);
     if (sigTecBytes != null) _addBinary(archive, 'word/media/sig_tec.png', sigTecBytes);
 
+    // Imagens das fotos da análise de equipamento
+    for (var i = 0; i < analiseFotosBytes.length; i++) {
+      _addBinary(archive, 'word/media/analise_foto_$i.png', analiseFotosBytes[i]);
+    }
+
     // Documento principal
     _addFile(archive, 'word/document.xml',
-        _document(os, checklist, acessorios, sigCliBytes != null, sigTecBytes != null, tecnicoNome));
+        _document(os, checklist, acessorios, sigCliBytes != null, sigTecBytes != null,
+            tecnicoNome, analise, analiseFotosBytes, testes));
 
     final encoded = ZipEncoder().encode(archive);
     if (encoded == null) throw Exception('Falha ao gerar arquivo Word');
@@ -83,11 +116,13 @@ class WordService {
 
   // ─── XML Parts ────────────────────────────────────────────
 
-  static String _contentTypes(bool hasSigCli, bool hasSigTec) => '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+  static String _contentTypes(bool hasSigCli, bool hasSigTec,
+          {bool hasAnaliseFotos = false}) =>
+      '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
   <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
   <Default Extension="xml" ContentType="application/xml"/>
-  ${hasSigCli || hasSigTec ? '<Default Extension="png" ContentType="image/png"/>' : ''}
+  ${hasSigCli || hasSigTec || hasAnaliseFotos ? '<Default Extension="png" ContentType="image/png"/>' : ''}
   <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
   <Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
   <Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/>
@@ -98,10 +133,16 @@ class WordService {
   <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
 </Relationships>''';
 
-  static String _docRels(bool hasSigCli, bool hasSigTec) {
+  static String _docRels(bool hasSigCli, bool hasSigTec,
+      {int analiseFotosCount = 0}) {
+    const imgType =
+        'http://schemas.openxmlformats.org/officeDocument/2006/relationships/image';
     final imgs = StringBuffer();
-    if (hasSigCli) imgs.write('\n  <Relationship Id="rIdSigCli" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/sig_cli.png"/>');
-    if (hasSigTec) imgs.write('\n  <Relationship Id="rIdSigTec" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/sig_tec.png"/>');
+    if (hasSigCli) imgs.write('\n  <Relationship Id="rIdSigCli" Type="$imgType" Target="media/sig_cli.png"/>');
+    if (hasSigTec) imgs.write('\n  <Relationship Id="rIdSigTec" Type="$imgType" Target="media/sig_tec.png"/>');
+    for (var i = 0; i < analiseFotosCount; i++) {
+      imgs.write('\n  <Relationship Id="rIdAnalise$i" Type="$imgType" Target="media/analise_foto_$i.png"/>');
+    }
     return '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
   <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
@@ -124,7 +165,9 @@ class WordService {
 
   // ─── Documento principal ───────────────────────────────────
   static String _document(OrdemServico os, List<ChecklistItem> checklist,
-      List<OsAcessorio> acessorios, bool hasSigCli, bool hasSigTec, String tecnicoNome) {
+      List<OsAcessorio> acessorios, bool hasSigCli, bool hasSigTec, String tecnicoNome,
+      EquipamentoOS? analise, List<Uint8List> analiseFotosBytes,
+      List<OsTesteItem> testes) {
     final fmt   = DateFormat('dd/MM/yyyy');
     final fmtDt = DateFormat('dd/MM/yy');
     final agora = DateFormat('dd/MM/yyyy HH:mm').format(DateTime.now());
@@ -164,6 +207,54 @@ class WordService {
       body.write(_emptyP());
     }
 
+    // ── Análise de Equipamentos ─────────────────────────────
+    if (analise != null) {
+      body.write(_sectionHeader('ANÁLISE DE EQUIPAMENTOS'));
+      body.write(_tbl([
+        _kvRow('Tipo de Equipamento',     analise.tipoEquipamento),
+        _kvRow('ID / Nome',               analise.idNome),
+        if (analise.tipoRadio.isNotEmpty)  _kvRow('Tipo de Rádio', analise.tipoRadio),
+        if (analise.marcaRadio.isNotEmpty) _kvRow('Marca', analise.marcaRadio),
+        _kvRow('Modelo',                  analise.modelo),
+        _kvRow('Número de Série',         analise.numeroSerie),
+        if (analise.faixa.isNotEmpty)     _kvRow('Faixa', analise.faixa),
+        if (analise.firmware.isNotEmpty)  _kvRow('Firmware / Versão', analise.firmware),
+        _kvRow('Freq. TX (MHz)',          analise.freqTx.toStringAsFixed(3)),
+        _kvRow('Freq. RX (MHz)',          analise.freqRx.toStringAsFixed(3)),
+        _kvRow('Potência TX (W)',         analise.potencia.toStringAsFixed(1)),
+        _kvRow('Pot. Refletida (W)',      analise.potenciaRefletida.toStringAsFixed(2)),
+        _kvRow('ROE / VSWR',              analise.roeVswr),
+        _kvRow('Tipo de Antena',          analise.tipoAntena),
+        _kvRow('Altura da Antena (m)',    analise.alturaAntena.toStringAsFixed(1)),
+        _kvRow('Tipo de Cabo',            analise.tipoCabo),
+        _kvRow('Comprimento do Cabo (m)', analise.comprCabo.toStringAsFixed(1)),
+        _kvRow('Fonte Dedicada',          analise.possuiFonteDedicada ? 'Sim' : 'Não'),
+        if (analise.voltagemFonte.isNotEmpty)         _kvRow('Voltagem da Fonte (V)',  analise.voltagemFonte),
+        if (analise.acessoriosRadio.isNotEmpty)       _kvRow('Acessórios',            analise.acessoriosRadio.join(', ')),
+        if (analise.condicoesFisicasRadio.isNotEmpty) _kvRow('Condições Físicas',     analise.condicoesFisicasRadio),
+        if (analise.defeitosRelatados.isNotEmpty)     _kvRow('Defeitos Relatados',    analise.defeitosRelatados),
+        if (analise.solucaoProposta.isNotEmpty)       _kvRow('Solução Proposta',      analise.solucaoProposta),
+        if (analise.laudoTecnicoRadio.isNotEmpty)     _kvRow('Laudo Técnico',         analise.laudoTecnicoRadio),
+        if (analise.termosGarantia.isNotEmpty)        _kvRow('Termos de Garantia',    analise.termosGarantia),
+        if (analise.observacoes.isNotEmpty)           _kvRow('Observações',           analise.observacoes),
+      ]));
+      // Fotos do equipamento (2 por linha em tabela)
+      if (analiseFotosBytes.isNotEmpty) {
+        body.write(_emptyP());
+        final rows = <String>[];
+        for (var i = 0; i < analiseFotosBytes.length; i += 2) {
+          rows.add(_tr([
+            _tc(_imgXml('rIdAnalise$i', '2160000', '1620000', id: 3 + i)),
+            _tc(i + 1 < analiseFotosBytes.length
+                ? _imgXml('rIdAnalise${i + 1}', '2160000', '1620000', id: 3 + i + 1)
+                : _emptyP()),
+          ]));
+        }
+        body.write(_tbl(rows, borders: false));
+      }
+      body.write(_emptyP());
+    }
+
     // ── Laudo ───────────────────────────────────────────────
     final laudoRows = [
       if (os.condicoesFisicas != null) _kvRow('Condições Físicas', os.condicoesFisicas!),
@@ -177,9 +268,35 @@ class WordService {
     if (laudoRows.isNotEmpty) body.write(_tbl(laudoRows));
     body.write(_emptyP());
 
-    // ── Checklist ───────────────────────────────────────────
+    // ── Testes Realizados (Melhoria 4) ──────────────────────
+    if (testes.any((t) => t.feito)) {
+      body.write(_sectionHeader('TESTES REALIZADOS'));
+      body.write(_tbl([
+        _tr([
+          _tc(_p('#',           bold: true, color: 'FFFFFF', sz: 16), bg: '15803d', w: '400'),
+          _tc(_p('Teste',       bold: true, color: 'FFFFFF', sz: 16), bg: '15803d'),
+          _tc(_p('Status',      bold: true, color: 'FFFFFF', sz: 16), bg: '15803d', w: '900'),
+          _tc(_p('Observação',  bold: true, color: 'FFFFFF', sz: 16), bg: '15803d'),
+        ]),
+        ...testes.asMap().entries.map((e) {
+          final item   = e.value;
+          final status = item.feito ? 'OK' : 'Pendente';
+          return _tr([
+            _tc(_p('${e.key + 1}', sz: 16, color: '64748b'), w: '400'),
+            _tc(_p(item.itemNome,  sz: 16)),
+            _tc(_p(status, bold: true, sz: 16,
+                color: item.feito ? '16a34a' : 'dc2626'), w: '900'),
+            _tc(_p(item.observacao.isNotEmpty ? item.observacao : '-',
+                sz: 16, color: '64748b')),
+          ]);
+        }),
+      ]));
+      body.write(_emptyP());
+    }
+
+    // ── Checklist legado ─────────────────────────────────────
     if (checklist.isNotEmpty) {
-      body.write(_sectionHeader('CHECKLIST DE TESTES'));
+      body.write(_sectionHeader('CHECKLIST LEGADO'));
       body.write(_tbl([
         _tr([
           _tc(_p('#',              bold: true, color: 'FFFFFF', sz: 16), bg: '15803d', w: '400'),
@@ -332,6 +449,17 @@ class WordService {
 
   static String _espacoSig() =>
       '<w:p><w:pPr><w:spacing w:before="1800"/></w:pPr></w:p>';
+
+  // ── Baixa imagem de URL ────────────────────────────────────
+  static Future<Uint8List?> _downloadBytes(String url) async {
+    try {
+      final request  = await HttpClient().getUrl(Uri.parse(url));
+      final response = await request.close();
+      final chunks   = <List<int>>[];
+      await for (final chunk in response) { chunks.add(chunk); }
+      return Uint8List.fromList(chunks.expand((c) => c).toList());
+    } catch (_) { return null; }
+  }
 
   // ── Decodifica base64 → bytes ──────────────────────────────
   static Uint8List? _decodeSig(String? raw) {

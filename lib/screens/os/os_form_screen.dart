@@ -4,17 +4,20 @@ import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:intl/intl.dart';
+import 'package:uuid/uuid.dart';
 import '../../models/ordem_servico.dart';
 import '../../models/cliente.dart';
 import '../../models/equipamento.dart';
 import '../../models/usuario.dart';
 import '../../models/os_checklist.dart';
 import '../../models/os_acessorio.dart';
+import '../../models/os_analise_equipamento.dart';
 import '../../services/os_service.dart';
 import '../../services/cliente_service.dart';
 import '../../services/equipamento_service.dart';
 import '../../services/auth_service.dart';
 import '../../utils/constants.dart';
+import '../../widgets/analise_equipamento_form.dart';
 import '../../widgets/foto_picker.dart';
 import '../../widgets/signature_pad_widget.dart';
 
@@ -79,6 +82,10 @@ class _OsFormScreenState extends State<OsFormScreen> {
   final _sigClienteCtrl = SignaturePadController();
   final _sigTecnicoCtrl = SignaturePadController();
 
+  EquipamentoOS? _analise;
+  late String _analiseOsId;
+  final _analiseKey = GlobalKey<AnaliseEquipamentoFormState>();
+
   static const List<String> _statusEquipOpcoes = [
     'Funcionando', 'Em Diagnóstico', 'Em Reparo', 'Ag. Retirada', 'Sem Conserto',
   ];
@@ -87,6 +94,7 @@ class _OsFormScreenState extends State<OsFormScreen> {
   void initState() {
     super.initState();
     _checklist = ChecklistItem.padrao();
+    _analiseOsId = widget.osParaEditar?.id ?? const Uuid().v4();
     _carregar();
     if (widget.osParaEditar != null) _preencherCampos();
   }
@@ -184,18 +192,19 @@ class _OsFormScreenState extends State<OsFormScreen> {
 
       if (widget.osParaEditar != null) {
         final osId = widget.osParaEditar!.id;
-        final [fotos, check, aces] = await Future.wait([
+        final res2 = await Future.wait([
           OsService.listarFotos(osId),
           OsService.listarChecklist(osId),
           OsService.listarAcessorios(osId),
+          OsService.listarAnaliseEquipamento(osId),
         ]);
 
-        _fotosUrl = (fotos as List<Map<String, dynamic>>)
+        _fotosUrl = (res2[0] as List<Map<String, dynamic>>)
             .where((f) => f['pendente'] != true)
             .map((f) => f['caminho'] as String)
             .toList();
 
-        final checkItems = check as List<ChecklistItem>;
+        final checkItems = res2[1] as List<ChecklistItem>;
         if (checkItems.isNotEmpty) {
           for (final item in _checklist) {
             final existente = checkItems.where((c) => c.itemId == item.itemId).toList();
@@ -207,13 +216,15 @@ class _OsFormScreenState extends State<OsFormScreen> {
           }
         }
 
-        for (final a in aces as List<OsAcessorio>) {
+        for (final a in res2[2] as List<OsAcessorio>) {
           if (OsAcessorio.opcoesPadrao.contains(a.nome)) {
             _acessoriosSelecionados.add(a.nome);
           } else {
             _outrosAcessoriosCtrl.text = a.nome;
           }
         }
+
+        _analise = res2[3] as EquipamentoOS?;
         setState(() {});
       }
     } catch (_) {
@@ -345,11 +356,16 @@ class _OsFormScreenState extends State<OsFormScreen> {
 
       OrdemServico os;
       if (widget.osParaEditar == null) {
+        // Nova OS: criar OS primeiro, depois análise (FK constraint no Supabase)
         os = await OsService.criar(
             dados, _equipSelecionados, _checklist, todosAcessorios,
             sigCli != null ? List<int>.from(sigCli) : null,
-            sigTec != null ? List<int>.from(sigTec) : null);
+            sigTec != null ? List<int>.from(sigTec) : null,
+            preId: _analiseOsId);
+        await _analiseKey.currentState?.salvarSePreenchido();
       } else {
+        // Editar OS: análise antes (OS já existe, sem risco de FK)
+        await _analiseKey.currentState?.salvarSePreenchido();
         await OsService.atualizar(
             widget.osParaEditar!.id, dados, _equipSelecionados,
             _checklist, todosAcessorios,
@@ -805,7 +821,21 @@ class _OsFormScreenState extends State<OsFormScreen> {
                     ],
                   )),
 
-                  // ── 3. Equipamentos ───────────────────────────────
+                  // ── 3. Análise de Equipamentos ────────────────────
+                  _sectionCard(++_n, 'Análise de Equipamentos',
+                    AnaliseEquipamentoForm(
+                      key: _analiseKey,
+                      osId: _analiseOsId,
+                      analiseExistente: _analise,
+                      mostrarBotaoSalvar: false,
+                      onSalvo: () async {
+                        final nova = await OsService.listarAnaliseEquipamento(_analiseOsId);
+                        if (mounted) setState(() => _analise = nova);
+                      },
+                    ),
+                  ),
+
+                  // ── 4. Equipamentos ───────────────────────────────
                   if (_equipamentos.isNotEmpty)
                     _sectionCard(++_n, 'Equipamentos Vinculados', Column(
                       children: _equipamentos.map((eq) {
@@ -820,27 +850,31 @@ class _OsFormScreenState extends State<OsFormScreen> {
                             ),
                             borderRadius: BorderRadius.circular(9),
                           ),
-                          child: CheckboxListTile(
-                            title: Text(eq.descricaoCompleta,
-                                style: const TextStyle(color: kTextColor, fontSize: 14)),
-                            subtitle: Text('Série: ${eq.numeroSerie}',
-                                style: const TextStyle(color: kTextColor3, fontSize: 12)),
-                            value: sel,
-                            activeColor: kPrimaryColor,
-                            checkColor: Colors.white,
-                            onChanged: (v) => setState(() {
-                              if (v == true) {
-                                _equipSelecionados.add(eq.id);
-                              } else {
-                                _equipSelecionados.remove(eq.id);
-                              }
-                            }),
+                          child: Material(
+                            color: Colors.transparent,
+                            borderRadius: BorderRadius.circular(9),
+                            child: CheckboxListTile(
+                              title: Text(eq.descricaoCompleta,
+                                  style: const TextStyle(color: kTextColor, fontSize: 14)),
+                              subtitle: Text('Série: ${eq.numeroSerie}',
+                                  style: const TextStyle(color: kTextColor3, fontSize: 12)),
+                              value: sel,
+                              activeColor: kPrimaryColor,
+                              checkColor: Colors.white,
+                              onChanged: (v) => setState(() {
+                                if (v == true) {
+                                  _equipSelecionados.add(eq.id);
+                                } else {
+                                  _equipSelecionados.remove(eq.id);
+                                }
+                              }),
+                            ),
                           ),
                         );
                       }).toList(),
                     )),
 
-                  // ── 4. Condição e Defeito ─────────────────────────
+                  // ── 5. Condição e Defeito ─────────────────────────
                   _sectionCard(++_n, 'Condição e Defeito', Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -854,7 +888,7 @@ class _OsFormScreenState extends State<OsFormScreen> {
                     ],
                   )),
 
-                  // ── 5. Checklist ──────────────────────────────────
+                  // ── 6. Checklist ──────────────────────────────────
                   _sectionCard(++_n, 'Checklist de Testes', Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -880,7 +914,7 @@ class _OsFormScreenState extends State<OsFormScreen> {
                     ],
                   )),
 
-                  // ── 6. Laudo e Solução ────────────────────────────
+                  // ── 7. Laudo e Solução ────────────────────────────
                   _sectionCard(++_n, 'Laudo Técnico e Solução', Column(
                     children: [
                       _campo('Laudo / Diagnóstico Técnico', _laudoCtrl, maxLines: 4),
@@ -891,7 +925,7 @@ class _OsFormScreenState extends State<OsFormScreen> {
                     ],
                   )),
 
-                  // ── 7. GPS ────────────────────────────────────────
+                  // ── 8. GPS ────────────────────────────────────────
                   _sectionCard(++_n, 'Localização GPS', Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -983,7 +1017,7 @@ class _OsFormScreenState extends State<OsFormScreen> {
                     ],
                   )),
 
-                  // ── 8. Fotos ──────────────────────────────────────
+                  // ── 9. Fotos ──────────────────────────────────────
                   _sectionCard(++_n, 'Fotos', FotoPicker(
                     fotosUrl: _fotosUrl,
                     fotosLocais: _fotosLocais,
@@ -992,7 +1026,7 @@ class _OsFormScreenState extends State<OsFormScreen> {
                     onFotoLocalRemovida: (i) => setState(() => _fotosLocais.removeAt(i)),
                   )),
 
-                  // ── 9. Assinaturas ────────────────────────────────
+                  // ── 10. Assinaturas ───────────────────────────────
                   _sectionCard(++_n, 'Assinaturas', Column(
                     children: [
                       SignaturePadWidget(controller: _sigClienteCtrl, label: 'Assinatura do Cliente'),

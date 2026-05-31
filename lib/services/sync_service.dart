@@ -95,6 +95,10 @@ class SyncService {
           await _processarInsert(tabela, payload);
         } else if (operacao == 'UPDATE') {
           await _processarUpdate(tabela, regId, payload);
+        } else if (operacao == 'UPSERT') {
+          await supabase.from(tabela).upsert(payload);
+        } else if (operacao == 'DELETE') {
+          await supabase.from(tabela).delete().eq('id', regId);
         }
 
         // Marca synced:1 no SQLite após envio bem-sucedido ao Supabase

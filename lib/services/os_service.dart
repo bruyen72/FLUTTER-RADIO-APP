@@ -8,6 +8,9 @@ import '../supabase_config.dart';
 import '../models/ordem_servico.dart';
 import '../models/os_checklist.dart';
 import '../models/os_acessorio.dart';
+import '../models/os_analise_equipamento.dart';
+import '../models/os_testes.dart';
+import '../models/os_visita.dart';
 import 'offline_service.dart';
 import 'auth_service.dart';
 
@@ -92,15 +95,19 @@ class OsService {
   }
 
   static Future<Map<String, int>> _statsLocal() async {
-    final local = await OfflineService.getOS();
-    return {
-      'total':      local.length,
-      'abertas':    local.where((m) => m['status'] == 'Aberto').length,
-      'andamento':  local.where((m) => m['status'] == 'Em Andamento').length,
-      'concluidas': local.where((m) => m['status'] == 'Concluído').length,
-      'canceladas': local.where((m) => m['status'] == 'Cancelado').length,
-      'urgentes':   local.where((m) => m['prioridade'] == 'Urgente').length,
-    };
+    try {
+      final local = await OfflineService.getOS();
+      return {
+        'total':      local.length,
+        'abertas':    local.where((m) => m['status'] == 'Aberto').length,
+        'andamento':  local.where((m) => m['status'] == 'Em Andamento').length,
+        'concluidas': local.where((m) => m['status'] == 'Concluído').length,
+        'canceladas': local.where((m) => m['status'] == 'Cancelado').length,
+        'urgentes':   local.where((m) => m['prioridade'] == 'Urgente').length,
+      };
+    } catch (_) {
+      return {'total': 0, 'abertas': 0, 'andamento': 0, 'concluidas': 0, 'canceladas': 0, 'urgentes': 0};
+    }
   }
 
   // ── Buscar por ID ─────────────────────────────────────────
@@ -136,9 +143,10 @@ class OsService {
     List<ChecklistItem> checklist,
     List<String> acessorios,
     List<int>? sigClienteBytes,
-    List<int>? sigTecnicoBytes,
-  ) async {
-    final id     = const Uuid().v4();
+    List<int>? sigTecnicoBytes, {
+    String? preId,
+  }) async {
+    final id     = preId ?? const Uuid().v4();
     final userId = AuthService.currentAuthUser?.id
         ?? await AuthService.userIdOffline()
         ?? '';
@@ -356,6 +364,10 @@ class OsService {
     }
   }
 
+  /// Copia um arquivo para storage permanente da OS (fora do cache temporário)
+  static Future<String> copiarFotoParaPermanente(File arquivo, String osId) =>
+      _permanente(arquivo, osId);
+
   static Future<String> _permanente(File arquivo, String osId) async {
     final dir   = await getApplicationDocumentsDirectory();
     final pasta = Directory(p.join(dir.path, 'survey_fotos'));
@@ -485,5 +497,156 @@ class OsService {
     final nome = nomesCache[tecId];
     if (nome == null || nome.isEmpty) return row;
     return {...row, 'tecnico_nome': nome};
+  }
+
+  // ── Análise de Equipamento (EquipamentoOS) ─────────────────
+  static Future<EquipamentoOS?> listarAnaliseEquipamento(String osId) async {
+    if (await _offline()) return _analiseLocal(osId);
+    try {
+      final data = await supabase
+          .from('os_analise_equipamento')
+          .select()
+          .eq('os_id', osId)
+          .maybeSingle();
+      if (data != null) {
+        final equip = EquipamentoOS.fromJson(data);
+        await OfflineService.salvarAnaliseEquipamento(equip.toLocal());
+        return equip;
+      }
+      // Supabase retornou null — tenta SQLite (salvo offline ou upsert falhou)
+      return _analiseLocal(osId);
+    } catch (_) {
+      return _analiseLocal(osId);
+    }
+  }
+
+  static Future<EquipamentoOS?> _analiseLocal(String osId) async {
+    try {
+      final m = await OfflineService.getAnaliseEquipamento(osId);
+      return m != null ? EquipamentoOS.fromLocal(m) : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static Future<void> salvarAnaliseEquipamento(EquipamentoOS equip) async {
+    await OfflineService.salvarAnaliseEquipamento(equip.toLocal());
+    final payload = {
+      ...equip.toJson(),
+      'id': equip.id,
+      'criado_em': equip.criadoEm.toIso8601String(),
+    };
+    try {
+      await supabase
+          .from('os_analise_equipamento')
+          .upsert(payload, onConflict: 'id');
+    } catch (e) {
+      // ignore: avoid_print
+      print('[AnaliseEquip] Supabase erro: $e');
+      await OfflineService.adicionarFila(
+          'os_analise_equipamento', 'UPSERT', equip.id, payload);
+    }
+  }
+
+  // ── Testes Realizados (Melhoria 4) ────────────────────────
+  static Future<List<OsTesteItem>> listarTestes(String osId) async {
+    if (await _offline()) return _testesLocal(osId);
+    try {
+      final data = await supabase
+          .from('os_testes')
+          .select()
+          .eq('os_id', osId)
+          .order('item_id');
+      final lista = (data as List).map((e) => OsTesteItem.fromJson(e)).toList();
+      await OfflineService.salvarTestesLocal(
+          osId, lista.map((t) => t.toLocal(osId)).toList());
+      return lista;
+    } catch (_) {
+      return _testesLocal(osId);
+    }
+  }
+
+  static Future<List<OsTesteItem>> _testesLocal(String osId) async {
+    final local = await OfflineService.getTestesLocal(osId);
+    if (local.isEmpty) return OsTesteItem.padrao();
+    return local.map((m) => OsTesteItem.fromJson({
+          'item_id': m['item_id'],
+          'item_nome': m['item_nome'],
+          'feito': m['feito'],
+          'observacao': m['observacao'],
+          'data_verificacao': m['data_verificacao'],
+        })).toList();
+  }
+
+  static Future<void> salvarTestes(
+      String osId, List<OsTesteItem> testes) async {
+    final localMaps = testes.map((t) => t.toLocal(osId)).toList();
+    await OfflineService.salvarTestesLocal(osId, localMaps);
+    try {
+      await supabase.from('os_testes').delete().eq('os_id', osId);
+      if (testes.isNotEmpty) {
+        await supabase
+            .from('os_testes')
+            .insert(testes.map((t) => t.toJson(osId)).toList());
+      }
+    } catch (_) {
+      await OfflineService.adicionarFila('os_testes', 'UPSERT', osId, {
+        'os_id': osId,
+        'itens': testes.map((t) => t.toJson(osId)).toList(),
+      });
+    }
+  }
+
+  // ── Visita Técnica (Melhoria 2) ───────────────────────────
+  static Future<OsVisita?> listarVisita(String osId) async {
+    if (await _offline()) return _visitaLocal(osId);
+    try {
+      final data = await supabase
+          .from('os_visita')
+          .select()
+          .eq('os_id', osId)
+          .maybeSingle();
+      if (data != null) {
+        final visita = OsVisita.fromJson(data);
+        await OfflineService.salvarVisitaLocal(visita.toLocal());
+        return visita;
+      }
+      return _visitaLocal(osId);
+    } catch (_) {
+      return _visitaLocal(osId);
+    }
+  }
+
+  static Future<OsVisita?> _visitaLocal(String osId) async {
+    final m = await OfflineService.getVisitaLocal(osId);
+    return m != null ? OsVisita.fromLocal(m) : null;
+  }
+
+  static Future<void> salvarVisita(OsVisita visita) async {
+    await OfflineService.salvarVisitaLocal(visita.toLocal());
+    try {
+      await supabase
+          .from('os_visita')
+          .upsert(visita.toJson(), onConflict: 'id');
+    } catch (_) {
+      await OfflineService.adicionarFila(
+          'os_visita', 'UPSERT', visita.id, visita.toJson());
+    }
+  }
+
+  // ── Atualizar fotos de seção (Melhoria 1) ─────────────────
+  /// [secao] = 'fotos_visita' | 'fotos_equipamento' | 'fotos_testes'
+  static Future<void> atualizarFotosSecao(
+      String osId, String secao, List<String> fotos) async {
+    await OfflineService.atualizarFotosSecaoOS(osId, secao, fotos);
+    try {
+      await supabase
+          .from('ordem_servico')
+          .update({secao: fotos, 'atualizado_em': DateTime.now().toIso8601String()})
+          .eq('id', osId);
+    } catch (_) {
+      await OfflineService.adicionarFila(
+          'ordem_servico', 'UPDATE', osId, {secao: fotos});
+    }
   }
 }

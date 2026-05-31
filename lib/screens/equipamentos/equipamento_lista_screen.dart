@@ -144,14 +144,67 @@ class _EquipamentoListaScreenState extends State<EquipamentoListaScreen> {
                                               fontSize: 11, color: kPrimaryColor)),
                                   ],
                                 ),
-                                trailing: const Icon(Icons.chevron_right),
+                                trailing: PopupMenuButton<String>(
+                                  icon: const Icon(Icons.more_vert, color: kTextColor3),
+                                  color: kCardColor,
+                                  itemBuilder: (_) => const [
+                                    PopupMenuItem(value: 'editar',    child: Text('Editar')),
+                                    PopupMenuItem(value: 'desativar', child: Text('Desativar')),
+                                    PopupMenuItem(value: 'apagar',    child: Text('Apagar', style: TextStyle(color: Colors.red))),
+                                  ],
+                                  onSelected: (v) async {
+                                    if (v == 'editar') {
+                                      await Navigator.push(
+                                        context,
+                                        MaterialPageRoute(
+                                          builder: (_) => EquipamentoFormScreen(equipParaEditar: e),
+                                        ),
+                                      );
+                                      _carregar();
+                                    } else if (v == 'desativar') {
+                                      final ok = await showDialog<bool>(
+                                        context: context,
+                                        builder: (_) => AlertDialog(
+                                          title: const Text('Desativar Equipamento'),
+                                          content: Text('Desativar "${e.marca} ${e.modelo}"?\nEle não será deletado.'),
+                                          actions: [
+                                            TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancelar')),
+                                            TextButton(onPressed: () => Navigator.pop(context, true),  child: const Text('Desativar')),
+                                          ],
+                                        ),
+                                      );
+                                      if (ok == true) {
+                                        await EquipamentoService.desativar(e.id);
+                                        _carregar();
+                                      }
+                                    } else if (v == 'apagar') {
+                                      final ok = await showDialog<bool>(
+                                        context: context,
+                                        builder: (_) => AlertDialog(
+                                          title: const Text('Apagar Equipamento'),
+                                          content: Text('Apagar "${e.marca} ${e.modelo}" permanentemente?\nEsta ação não pode ser desfeita.'),
+                                          actions: [
+                                            TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancelar')),
+                                            TextButton(
+                                              onPressed: () => Navigator.pop(context, true),
+                                              child: const Text('Apagar', style: TextStyle(color: Colors.red)),
+                                            ),
+                                          ],
+                                        ),
+                                      );
+                                      if (ok == true) {
+                                        await EquipamentoService.deletar(e.id);
+                                        _carregar();
+                                      }
+                                    }
+                                  },
+                                ),
                                 isThreeLine: true,
                                 onTap: () async {
                                   await Navigator.push(
                                     context,
                                     MaterialPageRoute(
-                                      builder: (_) =>
-                                          EquipamentoFormScreen(equipParaEditar: e),
+                                      builder: (_) => EquipamentoFormScreen(equipParaEditar: e),
                                     ),
                                   );
                                   _carregar();

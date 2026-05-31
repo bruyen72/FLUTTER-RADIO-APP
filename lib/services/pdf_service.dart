@@ -9,6 +9,8 @@ import 'package:printing/printing.dart';
 import '../models/ordem_servico.dart';
 import '../models/os_acessorio.dart';
 import '../models/os_checklist.dart';
+import '../models/os_analise_equipamento.dart';
+import '../models/os_testes.dart';
 import '../models/usuario.dart';
 import 'auth_service.dart';
 import 'os_service.dart';
@@ -32,11 +34,15 @@ class PdfService {
       OsService.listarAcessorios(os.id),
       OsService.listarAssinatura(os.id),
       AuthService.getProfile(),
+      OsService.listarAnaliseEquipamento(os.id),
+      OsService.listarTestes(os.id),
     ]);
     final checklist  = results[0] as List<ChecklistItem>;
     final acessorios = results[1] as List<OsAcessorio>;
     final assinatura = results[2] as Map<String, dynamic>?;
     final perfil     = results[3] as Usuario?;
+    final analise    = results[4] as EquipamentoOS?;
+    final testes     = results[5] as List<OsTesteItem>;
 
     // Determina nome do técnico (prioriza objeto, depois perfil logado se ID bater)
     String tecnicoNome = os.tecnicoNome ?? '-';
@@ -48,6 +54,40 @@ class PdfService {
 
     final sigCli = _decodeSig(assinatura?['sig_cliente'] as String?);
     final sigTec = _decodeSig(assinatura?['sig_tecnico'] as String?);
+
+    // Pré-carrega bytes das fotos do equipamento (local ou URL)
+    final analiseFotosBytes = <Uint8List>[];
+    if (analise != null) {
+      for (final path in analise.fotos) {
+        try {
+          Uint8List? bytes;
+          if (path.startsWith('http')) {
+            bytes = await _downloadBytes(path);
+          } else {
+            final f = File(path);
+            if (await f.exists()) bytes = await f.readAsBytes();
+          }
+          if (bytes != null) analiseFotosBytes.add(bytes);
+        } catch (_) {}
+      }
+    }
+
+    // Pré-carrega fotos por seção
+    Future<List<Uint8List>> _carregarFotosSecao(List<String> paths) async {
+      final bytes = <Uint8List>[];
+      for (final p in paths) {
+        try {
+          Uint8List? b;
+          if (p.startsWith('http')) { b = await _downloadBytes(p); }
+          else { final f = File(p); if (await f.exists()) b = await f.readAsBytes(); }
+          if (b != null) bytes.add(b);
+        } catch (_) {}
+      }
+      return bytes;
+    }
+
+    final fotosVisitaBytes    = await _carregarFotosSecao(os.fotosVisita);
+    final fotosTestesBytes    = await _carregarFotosSecao(os.fotosTestes);
 
     final pdf = pw.Document();
     final fmt = DateFormat('dd/MM/yyyy');
@@ -80,6 +120,19 @@ class PdfService {
           pw.SizedBox(height: 12),
         ],
 
+        // Fotos da visita técnica
+        if (fotosVisitaBytes.isNotEmpty) ...[
+          _sectionTitle('FOTOS — VISITA TÉCNICA'),
+          _fotosGrid(fotosVisitaBytes),
+          pw.SizedBox(height: 12),
+        ],
+
+        if (analise != null) ...[
+          _sectionTitle('ANÁLISE DE EQUIPAMENTOS'),
+          _analiseEquipamentoWidget(analise, analiseFotosBytes),
+          pw.SizedBox(height: 12),
+        ],
+
         _sectionTitle('LAUDO TÉCNICO E SOLUÇÃO'),
         if (os.condicoesFisicas != null) _campo('CONDIÇÕES FÍSICAS DO EQUIPAMENTO', os.condicoesFisicas!),
         if (os.defeito != null) _campo('DEFEITO RELATADO', os.defeito!),
@@ -89,8 +142,22 @@ class PdfService {
         if (os.termosObservacoes != null) _campo('TERMOS E OBSERVAÇÕES', os.termosObservacoes!),
         pw.SizedBox(height: 12),
 
+        // Checklist de testes realizados (Melhoria 4)
+        if (testes.any((t) => t.feito)) ...[
+          _sectionTitle('TESTES REALIZADOS'),
+          _testesTable(testes),
+          pw.SizedBox(height: 12),
+        ],
+
+        // Fotos dos testes
+        if (fotosTestesBytes.isNotEmpty) ...[
+          _sectionTitle('FOTOS — TESTES'),
+          _fotosGrid(fotosTestesBytes),
+          pw.SizedBox(height: 12),
+        ],
+
         if (checklist.isNotEmpty) ...[
-          _sectionTitle('CHECKLIST DE TESTES'),
+          _sectionTitle('CHECKLIST LEGADO'),
           _checklistTable(checklist),
           pw.SizedBox(height: 12),
         ],
@@ -240,6 +307,72 @@ class PdfService {
     );
   }
 
+  // ── Tabela de análise de equipamentos ─────────────────────
+  static pw.Widget _analiseEquipamentoWidget(
+      EquipamentoOS e, List<Uint8List> fotosBytes) {
+    final border = pw.TableBorder.all(color: PdfColors.grey300, width: 0.3);
+    pw.Widget lbl(String t) => pw.Container(
+      padding: const pw.EdgeInsets.all(4),
+      color: _light,
+      child: pw.Text(t, style: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold, color: _muted)),
+    );
+    pw.Widget val(String t) => pw.Container(
+      padding: const pw.EdgeInsets.all(4),
+      child: pw.Text(t, style: pw.TextStyle(fontSize: 8, color: _dark)),
+    );
+    pw.TableRow kv(String k, String v) => pw.TableRow(children: [lbl(k), val(v)]);
+    final table = pw.Table(
+      border: border,
+      columnWidths: const {0: pw.FixedColumnWidth(130), 1: pw.FlexColumnWidth()},
+      children: [
+        kv('Tipo de Equipamento',     e.tipoEquipamento),
+        kv('ID / Nome',               e.idNome),
+        if (e.tipoRadio.isNotEmpty) kv('Tipo de Rádio',            e.tipoRadio),
+        if (e.marcaRadio.isNotEmpty) kv('Marca',                   e.marcaRadio),
+        kv('Modelo',                  e.modelo),
+        kv('Número de Série',         e.numeroSerie),
+        if (e.faixa.isNotEmpty) kv('Faixa',                       e.faixa),
+        if (e.firmware.isNotEmpty) kv('Firmware / Versão',         e.firmware),
+        kv('Freq. TX (MHz)',          e.freqTx.toStringAsFixed(3)),
+        kv('Freq. RX (MHz)',          e.freqRx.toStringAsFixed(3)),
+        kv('Potência TX (W)',         e.potencia.toStringAsFixed(1)),
+        kv('Pot. Refletida (W)',      e.potenciaRefletida.toStringAsFixed(2)),
+        kv('ROE / VSWR',              e.roeVswr),
+        kv('Tipo de Antena',          e.tipoAntena),
+        kv('Altura da Antena (m)',    e.alturaAntena.toStringAsFixed(1)),
+        kv('Tipo de Cabo',            e.tipoCabo),
+        kv('Comprimento do Cabo (m)', e.comprCabo.toStringAsFixed(1)),
+        kv('Fonte Dedicada',          e.possuiFonteDedicada ? 'Sim' : 'Não'),
+        if (e.voltagemFonte.isNotEmpty)          kv('Voltagem da Fonte (V)',   e.voltagemFonte),
+        if (e.acessoriosRadio.isNotEmpty)        kv('Acessórios',             e.acessoriosRadio.join(', ')),
+        if (e.condicoesFisicasRadio.isNotEmpty)  kv('Condições Físicas',      e.condicoesFisicasRadio),
+        if (e.defeitosRelatados.isNotEmpty)      kv('Defeitos Relatados',     e.defeitosRelatados),
+        if (e.solucaoProposta.isNotEmpty)        kv('Solução Proposta',       e.solucaoProposta),
+        if (e.laudoTecnicoRadio.isNotEmpty)      kv('Laudo Técnico',          e.laudoTecnicoRadio),
+        if (e.termosGarantia.isNotEmpty)         kv('Termos de Garantia',     e.termosGarantia),
+        if (e.observacoes.isNotEmpty)            kv('Observações',            e.observacoes),
+      ],
+    );
+    if (fotosBytes.isEmpty) return table;
+    return pw.Column(
+      crossAxisAlignment: pw.CrossAxisAlignment.start,
+      children: [
+        table,
+        pw.SizedBox(height: 8),
+        pw.Wrap(
+          spacing: 6,
+          runSpacing: 6,
+          children: fotosBytes
+              .map((b) => pw.SizedBox(
+                    width: 120, height: 90,
+                    child: pw.Image(pw.MemoryImage(b), fit: pw.BoxFit.cover),
+                  ))
+              .toList(),
+        ),
+      ],
+    );
+  }
+
   // ── Campo de texto longo ───────────────────────────────────
   static pw.Widget _campo(String label, String valor) => pw.Column(
     crossAxisAlignment: pw.CrossAxisAlignment.start,
@@ -275,6 +408,69 @@ class PdfService {
           style: pw.TextStyle(fontSize: 9, fontWeight: pw.FontWeight.bold, color: _greenD)),
     )).toList(),
   );
+
+  // ── Grid de fotos (visita / testes) ───────────────────────────
+  static pw.Widget _fotosGrid(List<Uint8List> fotosBytes) => pw.Wrap(
+    spacing: 6,
+    runSpacing: 6,
+    children: fotosBytes
+        .map((b) => pw.SizedBox(
+              width: 120, height: 90,
+              child: pw.Image(pw.MemoryImage(b), fit: pw.BoxFit.cover),
+            ))
+        .toList(),
+  );
+
+  // ── Tabela de testes realizados ────────────────────────────────
+  static pw.Widget _testesTable(List<OsTesteItem> items) {
+    pw.Widget head(String t) => pw.Padding(
+      padding: const pw.EdgeInsets.all(4),
+      child: pw.Text(t, style: pw.TextStyle(fontSize: 7, fontWeight: pw.FontWeight.bold, color: _white)),
+    );
+    pw.Widget cell(String t, {PdfColor? color}) => pw.Padding(
+      padding: const pw.EdgeInsets.all(4),
+      child: pw.Text(t, style: pw.TextStyle(fontSize: 7, color: color ?? _dark)),
+    );
+
+    return pw.Table(
+      border: pw.TableBorder.all(color: PdfColors.grey300, width: 0.3),
+      columnWidths: const {
+        0: pw.FixedColumnWidth(24),
+        1: pw.FlexColumnWidth(4),
+        2: pw.FixedColumnWidth(36),
+        3: pw.FlexColumnWidth(5),
+      },
+      children: [
+        pw.TableRow(
+          decoration: pw.BoxDecoration(color: _greenD),
+          children: ['#', 'Teste', 'Status', 'Observação'].map(head).toList(),
+        ),
+        ...items.asMap().entries.map((e) {
+          final item = e.value;
+          final bg   = e.key.isEven ? _white : _light;
+          return pw.TableRow(
+            decoration: pw.BoxDecoration(color: bg),
+            children: [
+              cell('${e.key + 1}', color: _muted),
+              cell(item.itemNome),
+              pw.Padding(
+                padding: const pw.EdgeInsets.all(4),
+                child: pw.Text(
+                  item.feito ? 'OK' : 'Pendente',
+                  style: pw.TextStyle(
+                    fontSize: 8,
+                    fontWeight: pw.FontWeight.bold,
+                    color: item.feito ? _green : _danger,
+                  ),
+                ),
+              ),
+              cell(item.observacao.isNotEmpty ? item.observacao : '-', color: _muted),
+            ],
+          );
+        }),
+      ],
+    );
+  }
 
   // ── Tabela de checklist ────────────────────────────────────
   static pw.Widget _checklistTable(List<ChecklistItem> items) {
@@ -370,6 +566,17 @@ class PdfService {
       ],
     ),
   );
+
+  // ── Baixa imagem de URL ────────────────────────────────────
+  static Future<Uint8List?> _downloadBytes(String url) async {
+    try {
+      final request  = await HttpClient().getUrl(Uri.parse(url));
+      final response = await request.close();
+      final chunks   = <List<int>>[];
+      await for (final chunk in response) { chunks.add(chunk); }
+      return Uint8List.fromList(chunks.expand((c) => c).toList());
+    } catch (_) { return null; }
+  }
 
   // ── Decodifica base64 → bytes ──────────────────────────────
   static Uint8List? _decodeSig(String? raw) {

@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 class OrdemServico {
   final String id;
   final String numeroOs;
@@ -29,6 +31,11 @@ class OrdemServico {
   final DateTime atualizadoEm;
   final List<String> equipamentosIds;
 
+  // ── Fotos por seção (Melhoria 1) ─────────────────────────────
+  final List<String> fotosVisita;
+  final List<String> fotosEquipamento;
+  final List<String> fotosTestes;
+
   const OrdemServico({
     required this.id,
     required this.numeroOs,
@@ -59,7 +66,22 @@ class OrdemServico {
     required this.criadoEm,
     required this.atualizadoEm,
     this.equipamentosIds = const [],
+    this.fotosVisita = const [],
+    this.fotosEquipamento = const [],
+    this.fotosTestes = const [],
   });
+
+  // ── Helpers ───────────────────────────────────────────────────
+  static List<String> _parseJsonList(dynamic v) {
+    if (v == null) return const [];
+    if (v is List) return v.cast<String>();
+    if (v is String && v.isNotEmpty) {
+      try {
+        return (jsonDecode(v) as List).cast<String>();
+      } catch (_) {}
+    }
+    return const [];
+  }
 
   factory OrdemServico.fromJson(Map<String, dynamic> j) {
     List<String> equips = [];
@@ -98,14 +120,19 @@ class OrdemServico {
       tecnicoNome: j['tecnico'] != null
           ? (j['tecnico'] as Map<String, dynamic>)['nome'] as String?
           : null,
-      criadoPor: j['criado_por'] as String,
+      criadoPor: j['criado_por'] as String? ?? '',
       criadoEm: DateTime.tryParse(j['criado_em'] as String? ?? '') ?? DateTime.now(),
       atualizadoEm: DateTime.tryParse(j['atualizado_em'] as String? ?? '') ?? DateTime.now(),
       equipamentosIds: equips,
+      fotosVisita: _parseJsonList(j['fotos_visita']),
+      fotosEquipamento: _parseJsonList(j['fotos_equipamento']),
+      fotosTestes: _parseJsonList(j['fotos_testes']),
     );
   }
 
   Map<String, dynamic> toJson() => {
+        'id': id,
+        'numero_os': numeroOs,
         'descricao': descricao,
         'status': status,
         'prioridade': prioridade,
@@ -127,6 +154,12 @@ class OrdemServico {
         'ativo': ativo,
         'cliente_id': clienteId,
         'tecnico_id': tecnicoId,
+        'criado_por': criadoPor,
+        'criado_em': criadoEm.toIso8601String(),
+        'atualizado_em': atualizadoEm.toIso8601String(),
+        'fotos_visita': fotosVisita,
+        'fotos_equipamento': fotosEquipamento,
+        'fotos_testes': fotosTestes,
       };
 
   Map<String, dynamic> toLocal() => {
@@ -159,6 +192,9 @@ class OrdemServico {
         'criado_em': criadoEm.toIso8601String(),
         'atualizado_em': atualizadoEm.toIso8601String(),
         'synced': 1,
+        'fotos_visita': jsonEncode(fotosVisita),
+        'fotos_equipamento': jsonEncode(fotosEquipamento),
+        'fotos_testes': jsonEncode(fotosTestes),
       };
 
   factory OrdemServico.fromLocal(Map<String, dynamic> m) => OrdemServico(
@@ -193,5 +229,8 @@ class OrdemServico {
         criadoEm: DateTime.tryParse(m['criado_em'] as String? ?? '') ?? DateTime.now(),
         atualizadoEm: DateTime.tryParse(m['atualizado_em'] as String? ?? '') ?? DateTime.now(),
         equipamentosIds: (m['_equip_ids'] as List?)?.cast<String>() ?? const [],
+        fotosVisita: _parseJsonList(m['fotos_visita']),
+        fotosEquipamento: _parseJsonList(m['fotos_equipamento']),
+        fotosTestes: _parseJsonList(m['fotos_testes']),
       );
 }

@@ -35,7 +35,7 @@ const Color kColorUrgente = Color(0xFFfca5a5); // red-300     (badge-urgente)
 // ── Listas de domínio ────────────────────────────────────────
 const List<String> kStatusOS       = ['Aberto', 'Em Andamento', 'Concluído', 'Cancelado'];
 const List<String> kPrioridades    = ['Baixa', 'Média', 'Urgente'];
-const List<String> kTiposOcorrencia = ['Preventiva', 'Manutenção', 'Corretiva'];
+const List<String> kTiposOcorrencia = ['Preventiva', 'Manutenção', 'Corretiva', 'Laboratório', 'Campo'];
 
 // ── Helpers de cor ───────────────────────────────────────────
 Color statusColor(String status) {

@@ -7,17 +7,30 @@ import 'os_form_screen.dart';
 import 'os_detalhe_screen.dart';
 
 class OsListaScreen extends StatefulWidget {
-  const OsListaScreen({super.key});
+  /// Quando true, toque em um card abre OsVisitaScreen em vez de OsDetalheScreen
+  final bool modoVisita;
+
+  const OsListaScreen({super.key, this.modoVisita = false});
 
   @override
   State<OsListaScreen> createState() => _OsListaScreenState();
 }
 
-class _OsListaScreenState extends State<OsListaScreen> {
-  List<OrdemServico> _lista = [];
+class _OsListaScreenState extends State<OsListaScreen>
+    with SingleTickerProviderStateMixin {
+  // ── Abas (Melhoria 5) ────────────────────────────────────────
+  late final TabController _tabController;
+
+  static const _abas = [
+    (label: 'Todas',       filtro: null,          icone: Icons.list_alt_outlined),
+    (label: 'Laboratório', filtro: 'Laboratório',  icone: Icons.biotech_outlined),
+    (label: 'Campo',       filtro: 'Campo',        icone: Icons.explore_outlined),
+    (label: 'Urgente',     filtro: 'urgente',      icone: Icons.priority_high_rounded),
+  ];
+
+  List<OrdemServico> _lista    = [];
   List<OrdemServico> _filtrada = [];
-  // _clientes reservado para filtro futuro por cliente
-  Map<String, int> _stats = {};
+  Map<String, int>   _stats   = {};
   bool _loading = true;
   String? _filtroStatus;
   String? _filtroPrioridade;
@@ -27,12 +40,17 @@ class _OsListaScreenState extends State<OsListaScreen> {
   @override
   void initState() {
     super.initState();
+    _tabController = TabController(length: _abas.length, vsync: this);
+    _tabController.addListener(() {
+      if (!_tabController.indexIsChanging) _filtrar();
+    });
     _carregar();
     _buscaCtrl.addListener(_filtrar);
   }
 
   @override
   void dispose() {
+    _tabController.dispose();
     _buscaCtrl.dispose();
     super.dispose();
   }
@@ -45,8 +63,8 @@ class _OsListaScreenState extends State<OsListaScreen> {
     ]);
     if (mounted) {
       setState(() {
-        _lista = results[0] as List<OrdemServico>;
-        _stats = results[1] as Map<String, int>;
+        _lista  = results[0] as List<OrdemServico>;
+        _stats  = results[1] as Map<String, int>;
         _loading = false;
       });
       _filtrar();
@@ -54,14 +72,23 @@ class _OsListaScreenState extends State<OsListaScreen> {
   }
 
   void _filtrar() {
-    final q = _buscaCtrl.text.toLowerCase();
+    final q    = _buscaCtrl.text.toLowerCase();
+    final aba  = _abas[_tabController.index];
     setState(() {
       _filtrada = _lista.where((os) {
+        // Filtro por aba
+        bool matchAba = true;
+        if (aba.filtro == 'urgente') {
+          matchAba = os.prioridade == 'Urgente';
+        } else if (aba.filtro != null) {
+          matchAba = os.tipoOcorrencia == aba.filtro;
+        }
+        // Filtro por texto
         final matchBusca = q.isEmpty ||
             os.numeroOs.toLowerCase().contains(q) ||
             (os.clienteNome?.toLowerCase().contains(q) ?? false) ||
             (os.defeito?.toLowerCase().contains(q) ?? false);
-        return matchBusca;
+        return matchAba && matchBusca;
       }).toList();
     });
   }
@@ -95,38 +122,63 @@ class _OsListaScreenState extends State<OsListaScreen> {
     return Scaffold(
       backgroundColor: kBackgroundColor,
       appBar: AppBar(
-        title: const Text('Ordens de Serviço'),
+        title: Text(widget.modoVisita ? 'Selecione uma OS' : 'Ordens de Serviço'),
         backgroundColor: kSurfaceColor,
         foregroundColor: kTextColor,
         elevation: 0,
         surfaceTintColor: Colors.transparent,
         actions: [
-          PopupMenuButton<String>(
-            icon: const Icon(Icons.filter_list),
-            tooltip: 'Filtros',
-            itemBuilder: (_) => [
-              const PopupMenuItem(value: 'limpar', child: Text('Limpar filtros')),
-              const PopupMenuDivider(),
-              const PopupMenuItem(value: 'status_null', child: Text('Status: Todos')),
-              ...kStatusOS.map((s) => PopupMenuItem(value: 'status_$s', child: Text('Status: $s'))),
-              const PopupMenuDivider(),
-              const PopupMenuItem(value: 'prio_null', child: Text('Prioridade: Todas')),
-              ...kPrioridades.map((p) => PopupMenuItem(value: 'prio_$p', child: Text('Prioridade: $p'))),
-            ],
-            onSelected: (v) {
-              if (v == 'limpar') {
-                setState(() { _filtroStatus = null; _filtroPrioridade = null; _filtroClienteId = null; });
-              } else if (v.startsWith('status_')) {
-                final val = v.substring(7);
-                setState(() => _filtroStatus = val.isEmpty || val == 'null' ? null : val);
-              } else if (v.startsWith('prio_')) {
-                final val = v.substring(5);
-                setState(() => _filtroPrioridade = val.isEmpty || val == 'null' ? null : val);
-              }
-              _carregar();
-            },
-          ),
+          if (!widget.modoVisita)
+            PopupMenuButton<String>(
+              icon: const Icon(Icons.filter_list),
+              tooltip: 'Filtros',
+              itemBuilder: (_) => [
+                const PopupMenuItem(value: 'limpar', child: Text('Limpar filtros')),
+                const PopupMenuDivider(),
+                const PopupMenuItem(value: 'status_null', child: Text('Status: Todos')),
+                ...kStatusOS.map((s) => PopupMenuItem(value: 'status_$s', child: Text('Status: $s'))),
+                const PopupMenuDivider(),
+                const PopupMenuItem(value: 'prio_null', child: Text('Prioridade: Todas')),
+                ...kPrioridades.map((p) => PopupMenuItem(value: 'prio_$p', child: Text('Prioridade: $p'))),
+              ],
+              onSelected: (v) {
+                if (v == 'limpar') {
+                  setState(() { _filtroStatus = null; _filtroPrioridade = null; _filtroClienteId = null; });
+                } else if (v.startsWith('status_')) {
+                  final val = v.substring(7);
+                  setState(() => _filtroStatus = val.isEmpty || val == 'null' ? null : val);
+                } else if (v.startsWith('prio_')) {
+                  final val = v.substring(5);
+                  setState(() => _filtroPrioridade = val.isEmpty || val == 'null' ? null : val);
+                }
+                _carregar();
+              },
+            ),
         ],
+        // ── TabBar (Melhoria 5) ────────────────────────────
+        bottom: TabBar(
+          controller: _tabController,
+          isScrollable: true,
+          tabAlignment: TabAlignment.start,
+          indicatorColor: kPrimaryColor,
+          indicatorWeight: 2.5,
+          labelColor: kPrimaryLight,
+          unselectedLabelColor: kTextColor3,
+          labelStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
+          unselectedLabelStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.w400),
+          tabs: _abas
+              .map((a) => Tab(
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(a.icone, size: 14),
+                        const SizedBox(width: 4),
+                        Text(a.label),
+                      ],
+                    ),
+                  ))
+              .toList(),
+        ),
       ),
       body: Column(
         children: [
@@ -228,8 +280,7 @@ class _OsListaScreenState extends State<OsListaScreen> {
                               await Navigator.push(
                                 context,
                                 MaterialPageRoute(
-                                  builder: (_) =>
-                                      OsDetalheScreen(os: _filtrada[i]),
+                                  builder: (_) => OsDetalheScreen(os: _filtrada[i]),
                                 ),
                               );
                               _carregar();
@@ -240,19 +291,21 @@ class _OsListaScreenState extends State<OsListaScreen> {
           ),
         ],
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () async {
-          await Navigator.push(
-            context,
-            MaterialPageRoute(builder: (_) => const OsFormScreen()),
-          );
-          _carregar();
-        },
-        backgroundColor: kPrimaryColor,
-        foregroundColor: Colors.white,
-        icon: const Icon(Icons.add),
-        label: const Text('Nova OS'),
-      ),
+      floatingActionButton: widget.modoVisita
+          ? null
+          : FloatingActionButton.extended(
+              onPressed: () async {
+                await Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const OsFormScreen()),
+                );
+                _carregar();
+              },
+              backgroundColor: kPrimaryColor,
+              foregroundColor: Colors.white,
+              icon: const Icon(Icons.add),
+              label: const Text('Nova OS'),
+            ),
     );
   }
 }

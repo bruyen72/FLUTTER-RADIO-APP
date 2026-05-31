@@ -5,6 +5,7 @@ import '../services/os_service.dart';
 import '../utils/constants.dart';
 import 'os/os_form_screen.dart';
 import 'os/os_lista_screen.dart';
+import 'os/os_visita_screen.dart';
 import 'clientes/cliente_lista_screen.dart';
 import 'equipamentos/equipamento_lista_screen.dart';
 import 'notificacoes/notificacao_lista_screen.dart';
@@ -32,16 +33,20 @@ class _DashboardHomeScreenState extends State<DashboardHomeScreen> {
 
   Future<void> _carregar() async {
     setState(() => _loading = true);
-    final results = await Future.wait([
-      AuthService.getProfile(),
-      OsService.obterStats(),
-    ]);
-    if (mounted) {
-      setState(() {
-        _usuario = results[0] as Usuario?;
-        _stats   = results[1] as Map<String, int>;
-        _loading = false;
-      });
+    try {
+      final results = await Future.wait([
+        AuthService.getProfile(),
+        OsService.obterStats(),
+      ]);
+      if (mounted) {
+        setState(() {
+          _usuario = results[0] as Usuario?;
+          _stats   = results[1] as Map<String, int>;
+          _loading = false;
+        });
+      }
+    } catch (_) {
+      if (mounted) setState(() => _loading = false);
     }
   }
 
@@ -275,6 +280,7 @@ class _DashboardHomeScreenState extends State<DashboardHomeScreen> {
 
     final itens = [
       (Icons.assignment_outlined,      'Ordens de\nServiço',  () => Navigator.push(context, MaterialPageRoute(builder: (_) => const OsListaScreen()))),
+      (Icons.explore_outlined,         'Visita\nTécnica',     () => Navigator.push(context, MaterialPageRoute(builder: (_) => const OsVisitaScreen()))),
       (Icons.people_outline,           'Clientes',            () => Navigator.push(context, MaterialPageRoute(builder: (_) => const ClienteListaScreen()))),
       (Icons.devices_outlined,         'Equipamentos',        () => Navigator.push(context, MaterialPageRoute(builder: (_) => const EquipamentoListaScreen()))),
       (Icons.notifications_outlined,   'Notificações',        () => Navigator.push(context, MaterialPageRoute(builder: (_) => const NotificacaoListaScreen()))),

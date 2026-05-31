@@ -6,10 +6,14 @@ import 'package:intl/intl.dart';
 import '../../models/ordem_servico.dart';
 import '../../models/os_checklist.dart';
 import '../../models/os_acessorio.dart';
+import '../../models/os_analise_equipamento.dart';
 import '../../services/os_service.dart';
 import '../../services/pdf_service.dart';
 import '../../services/word_service.dart';
 import '../../utils/constants.dart';
+import '../../widgets/analise_equipamento_form.dart';
+import '../../widgets/testes_form.dart';
+import '../../widgets/foto_picker.dart';
 import '../../widgets/status_badge.dart';
 import 'os_form_screen.dart';
 
@@ -27,7 +31,16 @@ class _OsDetalheScreenState extends State<OsDetalheScreen> {
   List<ChecklistItem> _checklist = [];
   List<OsAcessorio> _acessorios = [];
   Map<String, dynamic>? _assinatura;
+  EquipamentoOS? _analise;
   bool _gerando = false;
+
+  // ── Fotos por seção (Melhoria 1) ─────────────────────────────
+  List<String> _fotosVisitaUrls      = [];
+  final List<File> _fotosVisitaLocais = [];
+  List<String> _fotosEquipUrls       = [];
+  final List<File> _fotosEquipLocais  = [];
+  List<String> _fotosTestesUrls      = [];
+  final List<File> _fotosTestesLocais = [];
 
   @override
   void initState() {
@@ -37,20 +50,65 @@ class _OsDetalheScreenState extends State<OsDetalheScreen> {
   }
 
   Future<void> _carregar() async {
-    final results = await Future.wait([
-      OsService.listarFotos(_os.id),
-      OsService.listarChecklist(_os.id),
-      OsService.listarAcessorios(_os.id),
-      OsService.listarAssinatura(_os.id),
+    // Carrega cada dado individualmente para que uma falha parcial
+    // não impeça os demais (incluindo _analise) de serem exibidos.
+    List<Map<String, dynamic>> fotos = [];
+    List<ChecklistItem> checklist = [];
+    List<OsAcessorio> acessorios = [];
+    Map<String, dynamic>? assinatura;
+    EquipamentoOS? analise;
+
+    await Future.wait([
+      OsService.listarFotos(_os.id)
+          .then((v) => fotos = v)
+          .catchError((_) {}),
+      OsService.listarChecklist(_os.id)
+          .then((v) => checklist = v)
+          .catchError((_) {}),
+      OsService.listarAcessorios(_os.id)
+          .then((v) => acessorios = v)
+          .catchError((_) {}),
+      OsService.listarAssinatura(_os.id)
+          .then((v) => assinatura = v)
+          .catchError((_) {}),
+      OsService.listarAnaliseEquipamento(_os.id)
+          .then((v) => analise = v)
+          .catchError((_) {}),
     ]);
+
     if (mounted) {
       setState(() {
-        _fotos      = results[0] as List<Map<String, dynamic>>;
-        _checklist  = results[1] as List<ChecklistItem>;
-        _acessorios = results[2] as List<OsAcessorio>;
-        _assinatura = results[3] as Map<String, dynamic>?;
+        _fotos      = fotos;
+        _checklist  = checklist;
+        _acessorios = acessorios;
+        _assinatura = assinatura;
+        _analise    = analise;
+        // Fotos por seção
+        _fotosVisitaUrls = List<String>.from(_os.fotosVisita);
+        _fotosEquipUrls  = List<String>.from(_os.fotosEquipamento);
+        _fotosTestesUrls = List<String>.from(_os.fotosTestes);
       });
     }
+  }
+
+  // ── Salva fotos de uma seção ──────────────────────────────────
+  Future<void> _salvarFotosSecao(
+      String coluna, List<String> urls, List<File> locais) async {
+    // Copia fotos locais para storage permanente antes de salvar.
+    // Paths do image_picker somem do cache Android — sem isso o PDF não acha o arquivo.
+    final permanentes = <String>[];
+    for (final f in locais) {
+      try {
+        final caminho = await OsService.copiarFotoParaPermanente(f, _os.id);
+        permanentes.add(caminho);
+      } catch (_) {
+        permanentes.add(f.path);
+      }
+    }
+    final todas = [...urls, ...permanentes];
+    await OsService.atualizarFotosSecao(_os.id, coluna, todas);
+    final nova = await OsService.buscarPorId(_os.id);
+    if (nova != null && mounted) setState(() => _os = nova);
   }
 
   Future<void> _gerarPdf() async {
@@ -116,6 +174,53 @@ class _OsDetalheScreenState extends State<OsDetalheScreen> {
           const Divider(height: 16),
         ],
       ),
+    );
+  }
+
+  /// Widget reutilizável de fotos por seção (Melhoria 1)
+  Widget _fotosSecaoWidget({
+    required String coluna,
+    required List<String> urls,
+    required List<File> locais,
+    required void Function(String) onAddUrl,
+    required void Function(int) onRemoveUrl,
+    required void Function(File) onAddLocal,
+    required void Function(int) onRemoveLocal,
+  }) {
+    final total = urls.length + locais.length;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        FotoPicker(
+          fotosUrl: urls,
+          fotosLocais: locais,
+          onFotoAdicionada: total >= 5
+              ? (_) => ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Máximo de 5 fotos atingido')),
+                  )
+              : onAddLocal,
+          onFotoUrlRemovida: onRemoveUrl,
+          onFotoLocalRemovida: onRemoveLocal,
+        ),
+        if (total > 0) ...[
+          const SizedBox(height: 8),
+          SizedBox(
+            width: double.infinity,
+            child: TextButton.icon(
+              onPressed: () => _salvarFotosSecao(coluna, urls, locais),
+              style: TextButton.styleFrom(
+                backgroundColor: kPrimaryColor.withOpacity(0.08),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
+                    side: const BorderSide(color: kPrimaryColor, width: 0.5)),
+              ),
+              icon: const Icon(Icons.save_outlined, size: 16, color: kPrimaryLight),
+              label: const Text('Salvar fotos desta seção',
+                  style: TextStyle(color: kPrimaryLight, fontSize: 13)),
+            ),
+          ),
+        ],
+      ],
     );
   }
 
@@ -278,6 +383,40 @@ class _OsDetalheScreenState extends State<OsDetalheScreen> {
             const SizedBox(height: 8),
           ],
 
+          // ── Fotos da Visita Técnica (Melhoria 1) ──────────
+          _secao('Fotos da Visita Técnica'),
+          _fotosSecaoWidget(
+            coluna: 'fotos_visita',
+            urls: _fotosVisitaUrls,
+            locais: _fotosVisitaLocais,
+            onAddUrl: (url) => setState(() => _fotosVisitaUrls.add(url)),
+            onRemoveUrl: (i) => setState(() => _fotosVisitaUrls.removeAt(i)),
+            onAddLocal: (f) => setState(() => _fotosVisitaLocais.add(f)),
+            onRemoveLocal: (i) => setState(() => _fotosVisitaLocais.removeAt(i)),
+          ),
+
+          // ── Análise de Equipamentos ────────────────────────
+          _secao('Análise de Equipamentos'),
+          // Fotos de Equipamento (Melhoria 1)
+          _fotosSecaoWidget(
+            coluna: 'fotos_equipamento',
+            urls: _fotosEquipUrls,
+            locais: _fotosEquipLocais,
+            onAddUrl: (url) => setState(() => _fotosEquipUrls.add(url)),
+            onRemoveUrl: (i) => setState(() => _fotosEquipUrls.removeAt(i)),
+            onAddLocal: (f) => setState(() => _fotosEquipLocais.add(f)),
+            onRemoveLocal: (i) => setState(() => _fotosEquipLocais.removeAt(i)),
+          ),
+          const SizedBox(height: 12),
+          AnaliseEquipamentoForm(
+            osId: _os.id,
+            analiseExistente: _analise,
+            onSalvo: () async {
+              final nova = await OsService.listarAnaliseEquipamento(_os.id);
+              if (mounted) setState(() => _analise = nova);
+            },
+          ),
+
           // ── Detalhes do Serviço ────────────────────────────
           _secao('Detalhes do Serviço'),
           _linha('Condições Físicas', _os.condicoesFisicas),
@@ -288,9 +427,25 @@ class _OsDetalheScreenState extends State<OsDetalheScreen> {
           _linha('Peças Utilizadas', _os.pecasUtilizadas),
           _linha('Termos e Observações', _os.termosObservacoes),
 
-          // ── Checklist ──────────────────────────────────────
+          // ── Testes Realizados (Melhoria 4) ────────────────
+          _secao('Testes Realizados'),
+          TestesForm(
+            osId: _os.id,
+            fotosTesteUrls: _fotosTestesUrls,
+            onSalvo: () async {
+              final nova = await OsService.buscarPorId(_os.id);
+              if (nova != null && mounted) {
+                setState(() {
+                  _os = nova;
+                  _fotosTestesUrls = List<String>.from(nova.fotosTestes);
+                });
+              }
+            },
+          ),
+
+          // ── Checklist legado ───────────────────────────────
           if (_checklist.isNotEmpty) ...[
-            _secao('Checklist de Testes'),
+            _secao('Checklist de Testes (legado)'),
             ..._checklist.map((item) => Padding(
                   padding: const EdgeInsets.only(bottom: 4),
                   child: Row(

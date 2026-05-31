@@ -14,7 +14,7 @@ class OfflineService {
     final path = join(await getDatabasesPath(), 'survey_offline.db');
     return openDatabase(
       path,
-      version: 8,
+      version: 12,
       onCreate: (db, v) async {
         await _criarTabelas(db);
       },
@@ -54,8 +54,85 @@ class OfflineService {
           ''');
         }
         if (oldV < 8) {
-          // Versão 7 → 8: email no cache de profiles para exibição offline
           await db.execute('ALTER TABLE profiles ADD COLUMN email TEXT');
+        }
+        if (oldV < 9) {
+          await db.execute('''
+            CREATE TABLE IF NOT EXISTS os_analise_equipamento (
+              id TEXT PRIMARY KEY,
+              os_id TEXT NOT NULL,
+              tipo_equipamento TEXT NOT NULL DEFAULT '',
+              id_nome TEXT NOT NULL DEFAULT '',
+              modelo TEXT NOT NULL DEFAULT '',
+              numero_serie TEXT NOT NULL DEFAULT '',
+              tipo_antena TEXT NOT NULL DEFAULT '',
+              altura_antena REAL NOT NULL DEFAULT 30.0,
+              tipo_cabo TEXT NOT NULL DEFAULT '',
+              compr_cabo REAL NOT NULL DEFAULT 40.0,
+              freq_tx REAL NOT NULL DEFAULT 0.0,
+              freq_rx REAL NOT NULL DEFAULT 0.0,
+              potencia REAL NOT NULL DEFAULT 45.0,
+              potencia_refletida REAL NOT NULL DEFAULT 0.5,
+              roe_vswr TEXT NOT NULL DEFAULT '',
+              possui_fonte_dedicada INTEGER NOT NULL DEFAULT 0,
+              voltagem_fonte TEXT NOT NULL DEFAULT '',
+              observacoes TEXT NOT NULL DEFAULT '',
+              fotos TEXT NOT NULL DEFAULT '[]'
+            )
+          ''');
+        }
+        if (oldV < 10) {
+          try { await db.execute("ALTER TABLE os_analise_equipamento ADD COLUMN criado_em TEXT NOT NULL DEFAULT ''"); } catch (_) {}
+          try { await db.execute("ALTER TABLE os_analise_equipamento ADD COLUMN atualizado_em TEXT NOT NULL DEFAULT ''"); } catch (_) {}
+        }
+        // ── v11: Fotos por seção na OS + campos de rádio na análise ──
+        if (oldV < 11) {
+          // Fotos por seção na tabela de OS
+          try { await db.execute("ALTER TABLE ordens_servico ADD COLUMN fotos_visita TEXT NOT NULL DEFAULT '[]'"); } catch (_) {}
+          try { await db.execute("ALTER TABLE ordens_servico ADD COLUMN fotos_equipamento TEXT NOT NULL DEFAULT '[]'"); } catch (_) {}
+          try { await db.execute("ALTER TABLE ordens_servico ADD COLUMN fotos_testes TEXT NOT NULL DEFAULT '[]'"); } catch (_) {}
+          // Campos específicos de rádio na análise de equipamento
+          try { await db.execute("ALTER TABLE os_analise_equipamento ADD COLUMN tipo_radio TEXT NOT NULL DEFAULT ''"); } catch (_) {}
+          try { await db.execute("ALTER TABLE os_analise_equipamento ADD COLUMN marca_radio TEXT NOT NULL DEFAULT ''"); } catch (_) {}
+          try { await db.execute("ALTER TABLE os_analise_equipamento ADD COLUMN faixa TEXT NOT NULL DEFAULT ''"); } catch (_) {}
+          try { await db.execute("ALTER TABLE os_analise_equipamento ADD COLUMN firmware TEXT NOT NULL DEFAULT ''"); } catch (_) {}
+          try { await db.execute("ALTER TABLE os_analise_equipamento ADD COLUMN condicoes_fisicas_radio TEXT NOT NULL DEFAULT ''"); } catch (_) {}
+          try { await db.execute("ALTER TABLE os_analise_equipamento ADD COLUMN defeitos_relatados TEXT NOT NULL DEFAULT ''"); } catch (_) {}
+          try { await db.execute("ALTER TABLE os_analise_equipamento ADD COLUMN acessorios_radio TEXT NOT NULL DEFAULT '[]'"); } catch (_) {}
+          try { await db.execute("ALTER TABLE os_analise_equipamento ADD COLUMN solucao_proposta TEXT NOT NULL DEFAULT ''"); } catch (_) {}
+          try { await db.execute("ALTER TABLE os_analise_equipamento ADD COLUMN laudo_tecnico_radio TEXT NOT NULL DEFAULT ''"); } catch (_) {}
+          try { await db.execute("ALTER TABLE os_analise_equipamento ADD COLUMN termos_garantia TEXT NOT NULL DEFAULT ''"); } catch (_) {}
+        }
+        // ── v12: Testes e Visita Técnica ─────────────────────────────
+        if (oldV < 12) {
+          await db.execute('''
+            CREATE TABLE IF NOT EXISTS os_testes_local (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              os_id TEXT NOT NULL,
+              item_id TEXT NOT NULL,
+              item_nome TEXT NOT NULL,
+              feito INTEGER NOT NULL DEFAULT 0,
+              observacao TEXT NOT NULL DEFAULT '',
+              data_verificacao TEXT
+            )
+          ''');
+          await db.execute('''
+            CREATE TABLE IF NOT EXISTS os_visita_local (
+              id TEXT PRIMARY KEY,
+              os_id TEXT NOT NULL,
+              local_visita TEXT NOT NULL DEFAULT '',
+              tecnico_responsavel TEXT NOT NULL DEFAULT '',
+              data_hora TEXT NOT NULL DEFAULT '',
+              descricao_problema TEXT NOT NULL DEFAULT '',
+              equipamentos_encontrados TEXT NOT NULL DEFAULT '',
+              fotos TEXT NOT NULL DEFAULT '[]',
+              observacoes_campo TEXT NOT NULL DEFAULT '',
+              status TEXT NOT NULL DEFAULT 'Em andamento',
+              criado_em TEXT NOT NULL,
+              atualizado_em TEXT NOT NULL,
+              synced INTEGER NOT NULL DEFAULT 0
+            )
+          ''');
         }
       },
     );
@@ -126,7 +203,10 @@ class OfflineService {
         criado_por TEXT NOT NULL,
         criado_em TEXT NOT NULL,
         atualizado_em TEXT NOT NULL,
-        synced INTEGER NOT NULL DEFAULT 1
+        synced INTEGER NOT NULL DEFAULT 1,
+        fotos_visita TEXT NOT NULL DEFAULT '[]',
+        fotos_equipamento TEXT NOT NULL DEFAULT '[]',
+        fotos_testes TEXT NOT NULL DEFAULT '[]'
       )
     ''');
     await db.execute('''
@@ -200,6 +280,69 @@ class OfflineService {
         criado_em INTEGER NOT NULL
       )
     ''');
+    await db.execute('''
+      CREATE TABLE os_analise_equipamento (
+        id TEXT PRIMARY KEY,
+        os_id TEXT NOT NULL,
+        tipo_equipamento TEXT NOT NULL DEFAULT '',
+        id_nome TEXT NOT NULL DEFAULT '',
+        modelo TEXT NOT NULL DEFAULT '',
+        numero_serie TEXT NOT NULL DEFAULT '',
+        tipo_radio TEXT NOT NULL DEFAULT '',
+        marca_radio TEXT NOT NULL DEFAULT '',
+        faixa TEXT NOT NULL DEFAULT '',
+        firmware TEXT NOT NULL DEFAULT '',
+        condicoes_fisicas_radio TEXT NOT NULL DEFAULT '',
+        defeitos_relatados TEXT NOT NULL DEFAULT '',
+        acessorios_radio TEXT NOT NULL DEFAULT '[]',
+        solucao_proposta TEXT NOT NULL DEFAULT '',
+        laudo_tecnico_radio TEXT NOT NULL DEFAULT '',
+        termos_garantia TEXT NOT NULL DEFAULT '',
+        tipo_antena TEXT NOT NULL DEFAULT '',
+        altura_antena REAL NOT NULL DEFAULT 30.0,
+        tipo_cabo TEXT NOT NULL DEFAULT '',
+        compr_cabo REAL NOT NULL DEFAULT 40.0,
+        freq_tx REAL NOT NULL DEFAULT 0.0,
+        freq_rx REAL NOT NULL DEFAULT 0.0,
+        potencia REAL NOT NULL DEFAULT 45.0,
+        potencia_refletida REAL NOT NULL DEFAULT 0.5,
+        roe_vswr TEXT NOT NULL DEFAULT '',
+        possui_fonte_dedicada INTEGER NOT NULL DEFAULT 0,
+        voltagem_fonte TEXT NOT NULL DEFAULT '',
+        observacoes TEXT NOT NULL DEFAULT '',
+        fotos TEXT NOT NULL DEFAULT '[]',
+        criado_em TEXT NOT NULL DEFAULT '',
+        atualizado_em TEXT NOT NULL DEFAULT ''
+      )
+    ''');
+    await db.execute('''
+      CREATE TABLE os_testes_local (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        os_id TEXT NOT NULL,
+        item_id TEXT NOT NULL,
+        item_nome TEXT NOT NULL,
+        feito INTEGER NOT NULL DEFAULT 0,
+        observacao TEXT NOT NULL DEFAULT '',
+        data_verificacao TEXT
+      )
+    ''');
+    await db.execute('''
+      CREATE TABLE os_visita_local (
+        id TEXT PRIMARY KEY,
+        os_id TEXT NOT NULL,
+        local_visita TEXT NOT NULL DEFAULT '',
+        tecnico_responsavel TEXT NOT NULL DEFAULT '',
+        data_hora TEXT NOT NULL DEFAULT '',
+        descricao_problema TEXT NOT NULL DEFAULT '',
+        equipamentos_encontrados TEXT NOT NULL DEFAULT '',
+        fotos TEXT NOT NULL DEFAULT '[]',
+        observacoes_campo TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'Em andamento',
+        criado_em TEXT NOT NULL,
+        atualizado_em TEXT NOT NULL,
+        synced INTEGER NOT NULL DEFAULT 0
+      )
+    ''');
   }
 
   // ── Notificações local ───────────────────────────────────
@@ -252,7 +395,6 @@ class OfflineService {
   static Future<void> salvarClientes(List<Map<String, dynamic>> lista) async {
     if (lista.isEmpty) return;
     final database = await db;
-    // IDs com edições locais pendentes — não sobrescreve
     final pendingRows = await database.query('clientes', columns: ['id'], where: 'synced = 0');
     final pendingIds = pendingRows.map((r) => r['id'] as String).toSet();
     final batch = database.batch();
@@ -281,7 +423,11 @@ class OfflineService {
         where: 'id = ?', whereArgs: [id]);
   }
 
-  // Marca um registro como sincronizado (synced = 1) em qualquer tabela local com essa coluna
+  static Future<void> deleteCliente(String id) async {
+    final database = await db;
+    await database.delete('clientes', where: 'id = ?', whereArgs: [id]);
+  }
+
   static Future<void> marcarSynced(String tabela, String id) async {
     final database = await db;
     await database.update(tabela, {'synced': 1}, where: 'id = ?', whereArgs: [id]);
@@ -320,6 +466,11 @@ class OfflineService {
         where: 'id = ?', whereArgs: [id]);
   }
 
+  static Future<void> deleteEquipamento(String id) async {
+    final database = await db;
+    await database.delete('equipamentos', where: 'id = ?', whereArgs: [id]);
+  }
+
   // ── Ordens de Serviço ─────────────────────────────────────
   static Future<void> salvarOS(List<Map<String, dynamic>> lista) async {
     final database = await db;
@@ -353,6 +504,18 @@ class OfflineService {
     final database = await db;
     await database.update('ordens_servico', {...dados, 'synced': 0},
         where: 'id = ?', whereArgs: [id]);
+  }
+
+  /// Atualiza apenas as fotos de uma seção específica da OS
+  static Future<void> atualizarFotosSecaoOS(
+      String osId, String coluna, List<String> fotos) async {
+    final database = await db;
+    await database.update(
+      'ordens_servico',
+      {coluna: jsonEncode(fotos), 'synced': 0},
+      where: 'id = ?',
+      whereArgs: [osId],
+    );
   }
 
   // ── Assinaturas local ────────────────────────────────────
@@ -501,7 +664,7 @@ class OfflineService {
     await database.delete('sync_queue', where: 'id = ?', whereArgs: [id]);
   }
 
-  // ── Equipamentos por OS (cache offline) ──────────────────────
+  // ── Equipamentos por OS ──────────────────────────────────
   static Future<void> salvarEquipamentosOs(String osId, List<String> equipIds) async {
     final database = await db;
     await database.delete('os_equipamento_local', where: 'os_id = ?', whereArgs: [osId]);
@@ -524,7 +687,6 @@ class OfflineService {
     return rows.map((r) => r['equipamento_id'] as String).toList();
   }
 
-  // Busca equipamentos de múltiplas OS em uma única query (eficiente para listas)
   static Future<Map<String, List<String>>> getEquipamentosOsMap(
       List<String> osIds) async {
     if (osIds.isEmpty) return {};
@@ -541,5 +703,91 @@ class OfflineService {
       map.putIfAbsent(osId, () => []).add(equipId);
     }
     return map;
+  }
+
+  // ── Análise de Equipamento ────────────────────────────────
+  static Future<void> salvarAnaliseEquipamento(Map<String, dynamic> dados) async {
+    final database = await db;
+    await database.delete(
+      'os_analise_equipamento',
+      where: 'os_id = ? AND id != ?',
+      whereArgs: [dados['os_id'], dados['id']],
+    );
+    await database.insert('os_analise_equipamento', dados,
+        conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
+  static Future<Map<String, dynamic>?> getAnaliseEquipamento(String osId) async {
+    final database = await db;
+    final rows = await database.query('os_analise_equipamento',
+        where: 'os_id = ?',
+        whereArgs: [osId],
+        orderBy: 'atualizado_em DESC',
+        limit: 1);
+    if (rows.isEmpty) return null;
+    final row = rows.first;
+    final vazio = (row['tipo_equipamento'] as String? ?? '').isEmpty &&
+        (row['id_nome'] as String? ?? '').isEmpty &&
+        (row['modelo'] as String? ?? '').isEmpty &&
+        (row['numero_serie'] as String? ?? '').isEmpty &&
+        (row['tipo_antena'] as String? ?? '').isEmpty &&
+        (row['tipo_cabo'] as String? ?? '').isEmpty &&
+        (row['roe_vswr'] as String? ?? '').isEmpty &&
+        (row['voltagem_fonte'] as String? ?? '').isEmpty &&
+        (row['observacoes'] as String? ?? '').isEmpty &&
+        (row['possui_fonte_dedicada'] as int? ?? 0) == 0 &&
+        (row['tipo_radio'] as String? ?? '').isEmpty &&
+        (row['marca_radio'] as String? ?? '').isEmpty;
+    return vazio ? null : row;
+  }
+
+  static Future<void> deleteAnaliseEquipamento(String osId) async {
+    final database = await db;
+    await database.delete('os_analise_equipamento',
+        where: 'os_id = ?', whereArgs: [osId]);
+  }
+
+  // ── Testes Local (Melhoria 4) ─────────────────────────────
+  static Future<void> salvarTestesLocal(
+      String osId, List<Map<String, dynamic>> itens) async {
+    final database = await db;
+    await database.delete('os_testes_local', where: 'os_id = ?', whereArgs: [osId]);
+    final batch = database.batch();
+    for (final item in itens) {
+      batch.insert('os_testes_local', {
+        'os_id': osId,
+        'item_id': item['item_id'],
+        'item_nome': item['item_nome'],
+        'feito': (item['feito'] == true || item['feito'] == 1) ? 1 : 0,
+        'observacao': item['observacao'] ?? '',
+        'data_verificacao': item['data_verificacao'],
+      });
+    }
+    await batch.commit(noResult: true);
+  }
+
+  static Future<List<Map<String, dynamic>>> getTestesLocal(String osId) async {
+    final database = await db;
+    return database.query('os_testes_local',
+        where: 'os_id = ?', whereArgs: [osId], orderBy: 'id ASC');
+  }
+
+  // ── Visita Técnica Local (Melhoria 2) ─────────────────────
+  static Future<void> salvarVisitaLocal(Map<String, dynamic> dados) async {
+    final database = await db;
+    await database.insert('os_visita_local', dados,
+        conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
+  static Future<Map<String, dynamic>?> getVisitaLocal(String osId) async {
+    final database = await db;
+    final rows = await database.query('os_visita_local',
+        where: 'os_id = ?', whereArgs: [osId], limit: 1);
+    return rows.isEmpty ? null : rows.first;
+  }
+
+  static Future<List<Map<String, dynamic>>> getTodasVisitasLocal() async {
+    final database = await db;
+    return database.query('os_visita_local', orderBy: 'atualizado_em DESC');
   }
 }

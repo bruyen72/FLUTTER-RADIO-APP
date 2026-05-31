@@ -86,15 +86,31 @@ class ClienteService {
   static Future<void> atualizar(String id, Map<String, dynamic> dados) async {
     final atualizadoEm = DateTime.now().toIso8601String();
     final dadosComData = {...dados, 'atualizado_em': atualizadoEm};
-    // Salva localmente como pendente (synced:0)
     await OfflineService.updateCliente(id, dadosComData);
     try {
       await supabase.from('cliente').update(dadosComData).eq('id', id);
-      // Sucesso: marca como sincronizado
       await OfflineService.updateCliente(id, {'atualizado_em': atualizadoEm}, synced: 1);
     } catch (_) {
-      // Inclui atualizado_em no payload para o sync
       await OfflineService.adicionarFila('cliente', 'UPDATE', id, dadosComData);
+    }
+  }
+
+  static Future<void> desativar(String id) async {
+    await OfflineService.updateCliente(id, {'ativo': 0});
+    try {
+      await supabase.from('cliente').update({'ativo': false}).eq('id', id);
+      await OfflineService.updateCliente(id, {'ativo': 0}, synced: 1);
+    } catch (_) {
+      await OfflineService.adicionarFila('cliente', 'UPDATE', id, {'ativo': false});
+    }
+  }
+
+  static Future<void> deletar(String id) async {
+    await OfflineService.deleteCliente(id);
+    try {
+      await supabase.from('cliente').delete().eq('id', id);
+    } catch (_) {
+      await OfflineService.adicionarFila('cliente', 'DELETE', id, {});
     }
   }
 }
